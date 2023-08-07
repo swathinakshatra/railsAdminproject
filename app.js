@@ -32,12 +32,10 @@ io.on('connection', async (socket) => {
     socket.on('getUserDetails', async (userid, callback) => {
       try {
         const hash = 'register';
-       
         const exists = await redis.redishexists(hash,userid);
         console.log("exists",exists);
       if (exists) {
           const userDetails = await redis.redishget(hash,userid);
-          
           console.log('User details:', userDetails);
           callback(null,userDetails);
         } else {

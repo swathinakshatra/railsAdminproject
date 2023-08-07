@@ -1,7 +1,7 @@
-
 const {AdminControls}=require('../models/admincontrols');
 const {Admin}=require('../models/Admin');
 const {User}=require('../models/user');
+const {Seating}=require('../models/places');
 module.exports = {
   insertDocument: async function (collectionName, document) {
     try {
@@ -37,11 +37,10 @@ module.exports = {
       throw error;
     }
   },
-  findselect: async function (collectionName) {
+  findselect: async function (collectionName, fieldsToExclude) {
     try {
       var tr = eval(collectionName);
-      const document = await tr.find().select(selectvalue);
-      //console.log("Found a document");
+      const document = await tr.find({}, fieldsToExclude);
       return document;
     } catch (error) {
       console.error(error);

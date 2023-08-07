@@ -1,33 +1,31 @@
 const mongoose = require('mongoose');
 
 const adminControlsSchema = new mongoose.Schema({
-  register: {
+  Register: {
     type: String,
     required: true,
     enum: ['Enable', 'Disable'],
     default: 'Disable'
   },
-  userlogin: {
+  login: {
     type: String,
     required: true,
     enum: ['Enable', 'Disable'],
     default: 'Disable'
   },
-  transactions: {  
+  Transfer: {  
     type: String,
     required: true,
     enum: ['Enable', 'Disable'],
     default: 'Disable'
   },
-  referral_one:{
-    type:String,
-    required:true
-    
+  referral_one: {
+    status: { type: String, required: true, default: 'Enable' },
+    level: { type: String, required: true, default: 1 }
   },
-  coins:[]
- 
-  
+  coins: { type:Array, default: [] }
 });
+  
 
 
 const AdminControls = mongoose.model('AdminControls', adminControlsSchema);

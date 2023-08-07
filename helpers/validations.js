@@ -1,6 +1,13 @@
 const Joi = require("joi");
 const adminValidation= (data) => {
   const schema = Joi.object({
+    name: Joi.string().pattern(/^[a-zA-Z]+$/).min(5).max(30).required().messages({
+      'string.pattern.base': 'Name must contain only letters',
+      'string.empty': 'Name is required',
+      'string.min': 'Name should have a minimum length of {#limit}',
+      'string.max': 'Name should have a maximum length of {#limit}',
+      'any.required': 'Name is required',
+    }),
     email: Joi.string().email().min(5).max(250).required().messages({
     'string.email': 'Invalid email format',
     'string.empty': 'Email is required',
@@ -14,18 +21,19 @@ const adminValidation= (data) => {
     'any.required': 'Password is required'
   }),
 admintype:Joi.string().required(),
-
-
-  
-  
-  
-
 });
 
   return schema.validate(data);
 };
 const validateNewAdmin= (data) => {
   const schema = Joi.object({
+    name: Joi.string().pattern(/^[a-zA-Z]+$/).min(5).max(30).required().messages({
+      'string.pattern.base': 'Name must contain only letters',
+      'string.empty': 'Name is required',
+      'string.min': 'Name should have a minimum length of {#limit}',
+      'string.max': 'Name should have a maximum length of {#limit}',
+      'any.required': 'Name is required',
+    }),
     email: Joi.string().email().min(5).max(250).required().messages({
     'string.email': 'Invalid email format',
     'string.empty': 'Email is required',
@@ -432,6 +440,24 @@ const loginadmin = (data) => {
   });
 return schema.validate(data);
 };
+
+const loginuser = (data) => {
+  const schema = Joi.object({
+  password: Joi.string().pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/).required().messages({
+    'string.pattern.base': 'Password should contain at least one uppercase letter, one lowercase letter, one number and one special character',
+    'string.empty': 'Password is required',
+    'any.required': 'Password is required'
+  }),
+  email: Joi.string().email().min(5).max(250).required().messages({
+    'string.email': 'Invalid email format',
+    'string.empty': 'Email is required',
+    'string.min': 'Email should have a minimum length of {#limit}',
+    'string.max': 'Email should have a maximum length of {#limit}',
+    'any.required': 'Email is required'
+  }),
+  });
+return schema.validate(data);
+};
 const validateemail = (data) => {
   const schema = Joi.object({
    email: Joi.string().email().min(5).max(250).required().messages({
@@ -462,7 +488,6 @@ const twofactorRegistration=(data)=> {
   last_login_ip: Joi.string().required(),
   fcm_token: Joi.string().required(),
   balances:Joi.array(),
-    
   referral_one: Joi.string().required(),
  
 });
@@ -484,10 +509,11 @@ const loginverify = (data) => {
       'string.length': 'OTP should have exactly 6 digits',
       'any.required': 'OTP is required'
     }),
-    twoFaCode: Joi.string().required()
-   
-
-
+    twoFaCode: Joi.string().pattern(/^\d+$/).required().messages({
+      'string.pattern.base': 'TwoFaCode should be a number',
+      'string.empty': 'TwoFaCode is required',
+      'any.required': 'TwoFaCode is required'
+    }),
   });
   return schema.validate(data);
 };
@@ -507,7 +533,11 @@ const resetpassword = (data) => {
       'string.length': 'OTP should have exactly 6 digits',
       'any.required': 'OTP is required'
     }),
-    twoFaCode: Joi.string().required(),
+    twoFaCode: Joi.string().pattern(/^\d+$/).required().messages({
+      'string.pattern.base': 'TwoFaCode should be a number',
+      'string.empty': 'TwoFaCode is required',
+      'any.required': 'TwoFaCode is required'
+    }),
     newPassword: Joi.string().pattern(/^(?=.*\d)(?=.*[!@#$%^&*])(?=.*[a-z])(?=.*[A-Z]).{8,}$/).required().messages({
       'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character, and be at least 8 characters long',
     })
@@ -523,17 +553,25 @@ const validateresetpassword = (data) => {
   });
   return schema.validate(data);
 };
+const validateadmintype = (data) => {
+  const schema = Joi.object({
+    adminId:Joi.string().required(),
+    admintype:Joi.string().required(),
+  });
+  return schema.validate(data);
+};
+const validateadminid = (data) => {
+  const schema = Joi.object({
+    adminId:Joi.string().required()
+    
+  });
+  return schema.validate(data);
+};
 const changepassword = (data) => {
   const schema = Joi.object({
-    email: Joi.string().email().min(5).max(250).required().messages({
-      'string.email': 'Invalid email format',
-      'string.empty': 'Email is required',
-      'string.min': 'Email should have a minimum length of {#limit}',
-      'string.max': 'Email should have a maximum length of {#limit}',
-      'any.required': 'Email is required'
-    }),
+   
     otp: Joi.string().length(6).pattern(/^\d+$/).required().messages({
-      'string.pattern.base': 'OTP should be a 6-digit number',
+      'string.pattern.base': 'OTP should be a 6 digit number',
       'string.empty': 'OTP is required',
       'string.length': 'OTP should have exactly 6 digits',
       'any.required': 'OTP is required'
@@ -543,6 +581,9 @@ const changepassword = (data) => {
       'string.empty': 'TwoFaCode is required',
       'string.length': 'TwoFaCode should have exactly 6 digits',
       'any.required': 'TwoFaCode is required'
+    }),
+    oldPassword: Joi.string().pattern(/^(?=.*\d)(?=.*[!@#$%^&*])(?=.*[a-z])(?=.*[A-Z]).{8,}$/).required().messages({
+      'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character, and be at least 8 characters long',
     }),
     newPassword: Joi.string().pattern(/^(?=.*\d)(?=.*[!@#$%^&*])(?=.*[a-z])(?=.*[A-Z]).{8,}$/).required().messages({
       'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character, and be at least 8 characters long',
@@ -563,6 +604,41 @@ const verifytwofa = (data) => {
   });
   return schema.validate(data);
 };
+const validatecoins = (data) => {
+  const schema = Joi.object({
+   
+    coinname: Joi.string().required(),
+    cointype: Joi.string().required(),
+    ticker: Joi.string().required(),
+    otcmin: Joi.number().min(100).required(),
+    otcmax: Joi.number().min(1000000).required(),
+    withdrawmin: Joi.number().min(100).required(),
+    withdrawmax: Joi.number().min(1000000).required(),
+    transmin: Joi.number().min(100).required(),
+    transmax: Joi.number().min(1000000).required(),
+    status: Joi.string().valid('Active', 'Inactive').required(),
+   
+  });
+  return schema.validate(data);
+};
+const validateadmincontrols = (data) => {
+  const schema = Joi.object({
+  Register: Joi.string().valid('Enable', 'Disable').default('Disable'),
+  login: Joi.string().valid('Enable', 'Disable').default('Disable'),
+  Transfer: Joi.string().valid('Enable', 'Disable').default('Disable'),
+  
+});
+return schema.validate(data);
+};
+const validatecontrols = (data) => {
+  const schema = Joi.object({
+    name: Joi.string().valid('Register', 'login', 'Transfer').required(),
+    value: Joi.string().valid('Enable', 'Disable').required()
+  });
+
+  return schema.validate(data);
+};
+
 
 
 
@@ -596,6 +672,12 @@ module.exports = {
   changepassword,
   verifytwofa,
   validateNewAdmin,
-  validateresetpassword
+  validateresetpassword,
+  validateadmintype,
+  validateadmincontrols,
+  validatecoins,
+  validatecontrols,
+  validateadminid,
+  loginuser
 
 };

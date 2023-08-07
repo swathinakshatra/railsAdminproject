@@ -3,16 +3,14 @@ const router = express.Router();
 require("dotenv").config();
 const path = require('path');
 const Queries=require('../helpers/mongofunctions');
-const {twofactorRegistration}=require('../helpers/validations');
+const {twofactorRegistration, loginuser,validateemail, loginverify}=require('../helpers/validations');
 const bcrypt = require("bcrypt");
 const { generateUserId } = require("../middleware/userid");
 const redisquery=require('../helpers/redis');
-const {loginemployee}=require('../helpers/validations');
 const jwt = require("jsonwebtoken");
 const twofactor = require("node-2fa");
 const tiger=require('../helpers/tigerbalm');
-const { User } = require('../models/user');
-const sharp = require('sharp');
+const auth=require('../middleware/auth');
 const fs = require('fs');
 const multer = require('multer');
 const storage = multer.diskStorage({
@@ -30,6 +28,10 @@ const upload = multer({ storage });
 
 router.post("/registration", async (req, res) => {
     try {
+      const adminControls = await Queries.findOneDocument({},"AdminControls");
+    if (adminControls.Register === 'Disable') {
+      return res.status(400).send("Registration is currently disabled.");
+    }
      const { error } = twofactorRegistration(req.body);
       if (error) return res.status(400).send(error.details[0].message);
       const userexists = await Queries.findOneDocument(
@@ -51,212 +53,279 @@ router.post("/registration", async (req, res) => {
       newusers.password = await bcrypt.hash(newusers.password, salt);
       const users = await Queries.insertDocument("User", newusers);
       if (!users) return res.status(400).send("failed to register user");
-      // const redisInsert = await redisquery.redishset("user",newusers.email, JSON.stringify(users));
-      // console.log(redisInsert, "redisInsert");
       return res.status(200).send("User Registered successfully");
     } catch (error) {
       console.log(error);
       return res.status(400).send(`Error: ${error}`);
     }
   });
-  router.post("/login", async (req, res) => {
+  
+  router.post("/getusers", async (req, res) => {
     try {
-      const { error } = loginemployee(req.body);
+      
+      const users = await Queries.find("User");
+
+      if(!users) return res.status(400).send("No admin found");
+      return res.status(200).send(users);
+    } catch (error) {
+      console.error(error);
+      return res.status(400).send(`Error --> ${error}`);
+    }
+  });
+
+  router.post("/userlogin", async (req, res) => {
+    try {
+      const { error } = loginuser(req.body);
       if (error) return res.status(400).send(error.details[0].message);
       const user = await Queries.findOneDocument(
         { email: req.body.email },"User");
       if (!user) {
-        return res.status(400).send("user not found");
+        return res.status(400).send("email not found");
       } else {
         const validpassword = await bcrypt.compare(
           req.body.password,
           user.password
         );
         if (!validpassword) {
-          return res.status(400).send("password does not match");
+          return res.status(400).send("Incorrect password");
         } else {
-        const token = jwt.sign(
-            {
-              userid: user.userid,
-              username: user.username,
-              email: user.email,
-              twofastatus:user.twofastatus,
-            },
-            process.env.jwtPrivateKey,
-            { expiresIn: "48h" }
-          );
-         return res.status(200).send(token);
+          const otp = "123456";
+          const redisinsert = await redisquery.redisSETEX(user.email, 60, otp);
+          if (!redisinsert) {
+            return res.status(400).send("Failed to send OTP.");
+          }
+          return res.status(200).send(crypto.encryptobj({
+                twoFaStatus: user.twoFaStatus,
+                otp: "OTP sent successfully",
+              })
+            );
         }
       }
     } catch (error) {
-      console.log(error);
-      return res.status(400).send( `error login -->${error}` );
+      await teleg.alert_Developers(error);
+      return res.status(400).send(`error userlogin -->${error}`);
     }
-});
-router.post('/sendotp', async (req, res) => {
-  try {
-    const user = await Queries.findOneDocument({ email: req.body.email }, "User");
-    if (!user) {
-      return res.status(400).send("Email not found");
+  });
+  router.post("/resendotp", async (req, res) => {
+    try {
+  
+      const { error } = validateemail(req.body);
+      if (error) return res.status(400).send(error.details[0].message);
+      const user = await Queries.findOneDocument(
+        { email: req.body.email },
+        "User"
+      );
+      if (!user) return res.status(400).send("email not found");
+      const otp = "123456";
+      const redisinsert = await redisquery.redisSETEX(user.email, 60, otp);
+      if (!redisinsert) {
+        return res.status(400).send("Failed to send OTP.");
+      }
+      return res.status(200).send(crypto.encryptobj("OTP send successfully"));
+    } catch (error) {
+      await teleg.alert_Developers(error);
+      return res.status(400).send(`error resendotp -->${error}`);
     }
-    const otp = "123456";
-    const redisinsert = await redisquery.redisSET(user.email, otp);
-    if (!redisinsert) {
-      return res.status(400).send("Failed to send OTP.");
-    }
-    const expires = await redisquery.redisexpire(user.email, 60);
-    console.log("expires", expires);
-    return res.status(200).send("OTP sent successfully");
-  } catch (error) { 
-    console.log(error);
-    return res.status(400).send(`Error: ${error}`);
-  }
-});
-router.post('/generate2facode', async (req, res) => {
-  try {
-    const user = await Queries.findOneDocument({ userid: req.body.userid }, "User");
-
-    if (!user) {
-      return res.status(400).send('user not found');
-    }
-    const {secret,qr} = twofactor.generateSecret({ 
-      name: "rails",
-      account: user.userid
-    });
-
-    const encryptedSecret = tiger.encrypt(secret);
-    const updated = await Queries.findOneAndUpdate(
-      { userid: req.body.userid},
-      { twofakey: encryptedSecret, twofastatus: "Active" },
-      "User",
-      { new: true }
-    );
-
-    if (!updated) {
-      return res.status(400).send("Failed to update document");
-    }
-
-    return res.status(200).send({ secret:encryptedSecret,qr, message: "Secret key generated successfully"});
-  } catch (error) {
-    console.log(error);
-    return res.status(400).send(`Error: ${error}`);
-  }
-});
-
-router.post('/verify2facode', async (req, res) => {
-  try {
-    const user = await Queries.findOneDocument({userid: req.body.userid}, "User");
-    if (!user) {
-      return res.status(400).send('user not found');
-    }
-    const email = req.body.email;
-    const otp = req.body.otp;
-    const redisget = await redisquery.redisGET(email);
-
-    if (!redisget) { 
-      const user = await Queries.findOneDocument({ email }, "User");
-      if (!user) {
-        return res.status(400).send("Email not found");
-      } else {
+  });
+  router.post("/verifyotp", async(req, res) => {
+    try {
+      const { error } = loginverify(req.body);
+      if (error) return res.status(400).send(error.details[0].message);
+      const user = await Queries.findOneDocument({ email:req.body.email },"User");
+      if (!user) return res.status(400).send("Email not found");
+      const email = req.body.email;
+      const otp = req.body.otp;
+      const redisget = await redisquery.redisGET(email);
+      if (!redisget) {
         return res.status(400).send("OTP expired");
       }
+      if (redisget !== otp) {
+        return res.status(400).send("Incorrect OTP");
+      }
+     
+      if (user.twoFaStatus === "enabled") {
+        const twoFaCode = req.body.twoFaCode;
+        const decryptedSecret = tiger.decrypt(user.twoFaKey);
+        const result = twofactor.verifyToken(decryptedSecret, twoFaCode);
+  
+        if (!result) {
+          return res.status(400).send("Invalid twoFaCode");
+        } else if (result.delta !== 0) {
+          return res.status(400).send("twoFacode Expired");
+        }
+      }
+      const token = jwt.sign(
+        {
+          userid: user.userid,
+          username:user.username,
+          email: user.email,
+          twofastatus: user.twofastatus
+        },
+        process.env.jwtPrivateKey,
+        { expiresIn: "30d" }
+      );
+      const encryptedResponse = crypto.encryptobj({
+        token: token,
+        message: "Login successfully",
+      });
+      return res.status(200).send(encryptedResponse);
+    } catch (error) {
+      await teleg.alert_Developers(error);
+      console.log(error);
+      return res.status(400).send(`Error loginverify --> ${error}`);
     }
-
-    if (redisget !== otp) {
-      return res.status(400).send("Incorrect OTP");
-    }
-
-    await redisquery.redisdelete(email);
-    const token = req.body.token;
-    const decryptedSecret = tiger.decrypt(user.twofakey);
-    const result = twofactor.verifyToken(decryptedSecret, token);
-    console.log("result",result);
-    if (result && result.delta === 0) {
+  });
+  router.post("/twofaenable", auth, async (req, res) => {
+    try {
+      const { error } = validateemail(req.body);
+      if (error) return res.status(400).send(error.details[0].message);
+      const user = await Queries.findOneDocument(
+        { email: req.body.email },
+        "User");
+      if (!user) {
+        return res.status(400).send("email not found");
+      }
+      const { secret, qr } = twofactor.generateSecret({
+        name: "Rails",
+        account: user.userid,
+      });
+      const encryptedSecret = tiger.encrypt(secret);
       const updated = await Queries.findOneAndUpdate(
-        { userid: req.body.userid },
-        { twofastatus: 'enabled' },
+        { email: req.body.email },
+        { twoFaKey: encryptedSecret },
         "User",
         { new: true }
       );
-
       if (!updated) {
-        return res.status(400).send('Failed to update document');
+        return res.status(400).send("Failed to update document");
       }
-
-      return res.status(200).send({twofacode:'2FA code verified successfully',message:'otp verified successfully'});
-    } else {
-      return res.status(400).send('Invalid or expired 2FA code');
+      return res.status(200).send(crypto.encryptobj({ secret: secret, qr }));
+    } catch (error) {
+      await teleg.alert_Developers(error);
+      console.log(error);
+      return res.status(400).send(`Error twofaenable: ${error}`);
     }
-  } catch (error) {
-    console.log(error);
-    return res.status(400).send(`Error: ${error}`);
-  }
-});
-router.post('/verify2fa', async (req, res) => {
-  try {
-    const user = await Queries.findOneDocument({userid: req.body.userid }, "User");
-    if (!user) {
-      return res.status(400).send('user not found');
-    }
-    const email = req.body.email;
-    const otp = req.body.otp;
-    const redisget = await redisquery.redisGET(email);
-   if (!redisget) { 
-      const user = await Queries.findOneDocument({ email }, "User");
+  });
+  router.post("/verifyenable", auth, async (req, res) => {
+    try {
+      const { error } = verifytwofa(req.body);
+      if (error) return res.status(400).send(error.details[0].message);
+      const user = await Queries.findOneDocument(
+        { email: req.user.email },
+        "User"
+      );
       if (!user) {
-        return res.status(400).send("Email not found");
+        return res.status(400).send("email not found");
+      }
+      const twoFaCode = req.body.twoFaCode;
+      const decryptedSecret = tiger.decrypt(user.twoFaKey);
+      const result = twofactor.verifyToken(decryptedSecret, twoFaCode);
+     if (result && result.delta === 0) {
+        const updated = await Queries.findOneAndUpdate(
+          { email: req.user.email },
+          { twoFaStatus: "enabled" },
+          "User",
+          { new: true }
+        );
+        if (!updated) {
+          return res.status(400).send("Failed to update document");
+        }
+        return res
+          .status(200)
+          .send(
+            crypto.encryptobj({ twofacode: "twoFACode verified successfully" })
+          );
+      } else if (result && result.delta !== 0) {
+        return res.status(400).send("Twofacode has expired");
       } else {
-        return res.status(400).send("OTP expired");
+        return res.status(400).send("Invalid Twofacode");
       }
+    } catch (error) {
+      console.log(error);
+      return res.status(400).send(`Error verifyenable: ${error.message}`);
     }
-    if (redisget !== otp) {
-      return res.status(400).send("Incorrect OTP");
-    }
-    await redisquery.redisdelete(email);
-    const token = req.body.token;
-    const decryptedSecret = tiger.decrypt(user.twoFaKey);
-    const result = twofactor.verifyToken(decryptedSecret, token);
-    console.log("result",result);
-    if (result && result.delta === 0) {
-      const updated = await Queries.findOneAndUpdate(
-        { userid: req.body.userid },
-        { twoFaStatus: 'disabled' },
-        "User",
-        { new: true });
-
-      if (!updated) {
-        return res.status(400).send('Failed to update document');
+  });
+  router.post("/twofadisable", auth, async (req, res) => {
+    try {
+      
+      const { error } = validateemail(req.body);
+      if (error) return res.status(400).send(error.details[0].message);
+      const user = await Queries.findOneDocument(
+        { email: req.body.email },
+        "User"
+      );
+      if (!user) {
+        return res.status(400).send("email not found");
+      } else {
+        const { secret, qr } = twofactor.generateSecret({
+          name: "Rails",
+          account: user.userid,
+        });
+        tiger.encrypt(secret);
+        return res.status(200).send(crypto.encryptobj({ secret: secret, qr }));
       }
-
-      return res.status(200).send({twofacode:'2FA code verified successfully',message:'otp verified successfully'});
-    } else {
-      return res.status(400).send('Invalid or expired 2FA code');
+    } catch (error) {
+      await teleg.alert_Developers(error);
+      console.log(error);
+      return res.status(400).send(`Error 2fadisable: ${error}`);
     }
-  } catch (error) {
-    console.log(error);
-    return res.status(400).send(`Error: ${error}`);
-  }
-});
+  });
+  
+  router.post("/verifydisable", auth, async (req, res) => {
+    try {
+     
+      const { error } = verifytwofa(req.body);
+      if (error) return res.status(400).send(error.details[0].message);
+      const user = await Queries.findOneDocument(
+        { email: req.user.email },
+        "User"
+      );
+      if (!user) {
+        return res.status(400).send("email not found");
+      }
+      const twoFaCode = req.body.twoFaCode;
+      const decryptedSecret = tiger.decrypt(user.twoFaKey);
+      const result = twofactor.verifyToken(decryptedSecret, twoFaCode);
+      if (result && result.delta === 0) {
+        const updated = await Queries.findOneAndUpdate(
+          { email: req.user.email },
+          { twoFaStatus: "disabled" },
+          "User",
+          { new: true }
+        );
+        if (!updated) {
+          return res.status(400).send("Failed to update document");
+        }
+        return res
+          .status(200)
+          .send(
+            crypto.encryptobj({ twofacode: "twoFaCode verified successfully" })
+          );
+      } else if (result && result.delta !== 0) {
+        return res.status(400).send("Twofacode has expired");
+      } else {
+        return res.status(400).send("Invalid twofacode");
+      }
+    } catch (error) {
+      console.log(error);
+      return res.status(400).send(`Error verify2fadisable: ${error.message}`);
+    }
+  });
 router.post('/userkyc', upload.array('files'), async (req, res) => {
   try {
     if (!req.body.userid) {
       return res.status(400).send('UserID is required');
     }
-
     const { userid } = req.body;
-
     const user = await Queries.findOneDocument({ userid },"User");
     if (!user) {
       return res.status(400).send("User not found");
     }
-
     const files = req.files;
-
     if (!files || files.length === 0) {
       return res.status(400).send('No files uploaded');
     }
-
-    for (const file of files) {
+   for (const file of files) {
       if (file.mimetype.includes('image')) {
         const imgBuffer = fs.readFileSync(file.path);
         const base64Image = imgBuffer.toString('base64');
@@ -269,7 +338,7 @@ router.post('/userkyc', upload.array('files'), async (req, res) => {
         return res.status(400).send('Invalid file format. Only images and PDFs are allowed.');
       }
     }
-
+ 
     await user.save();
 
     return res.status(200).send("Files saved in user's KYC details");
@@ -284,7 +353,7 @@ router.post('/downloadkyc', async (req, res) => {
     if (!user) {
       return res.status(400).send("User not found");
     }
-    let data;
+    let data;                                                                                   
     let extension;
     if (type === 'image') {
       data = user.kyc_details.kyc_image[index];
@@ -308,11 +377,4 @@ return res.status(200).send({ message: 'File downloaded successfully'});
     return res.status(400).send(e.message);
   }
 });
-
-
-
-
-
-
-
-module.exports = router;
+module.exports = router;   

@@ -10,12 +10,12 @@ const registrationSchema =new mongoose.Schema({
           kyc_image: [{ type: String }], 
           kyc_pdf: [{ type: String }]
         },
-        user_status: { type: String,required:true,enum: ['disabled', 'enabled'], default: 'disabled'  },
+        user_status: { type: String,required:true,enum: ['Active', 'InActive'], default: 'Active'  },
         withdraw_status: { type: String,required:true, enum: ['disabled', 'enabled'], default: 'disabled'  },
-        last_login_ip: { type: String, required: true },
-        fcm_token: { type: String, required: true, default: '0' },
+        last_login_ip: { type: String, required: true},
+        fcm_token: { type: String, required: true, default: '0'},
         balances: [],
-        referral_one: { type: String,required:true },
+        referral_one: { type: String,required:true},
         twofakey:{type:String,default:'0'},
         twofastatus: { type: String,required:true,enum: ['disabled', 'enabled'], default: 'disabled' },
       });
