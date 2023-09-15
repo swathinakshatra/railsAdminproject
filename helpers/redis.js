@@ -25,10 +25,10 @@ module.exports = {
       throw error;
     }
   },
-   redisSETEX : async (hash, expiryInSeconds,data) => {
+   redisSETEX : async (key,expiryInSeconds,data) => {
     try {
      
-      const result = await client.setEx(hash, expiryInSeconds, data);
+      const result = await client.setEx(key,expiryInSeconds,data);
       console.log(result);
       return result;
     } catch (error) {
@@ -36,6 +36,7 @@ module.exports = {
       throw error;
     }
   },
+ 
   redisexpire: async(hash,expired)=> {
     try {
       const result = await client.expire(hash,expired);
@@ -46,9 +47,9 @@ module.exports = {
       throw error;
     }
   },
-redisGET: async(hash)=> {
+redisGET: async(key)=> {
     try {
-      const result = await client.get(hash);
+      const result = await client.get(key);
       return result;
     } catch (error) {
       console.error(error);
@@ -84,8 +85,8 @@ redisGET: async(hash)=> {
     var reply = JSON.parse(result);
     return reply;
   },
-  redisexists: async (hash) => {
-    const result = await client.exists(hash);
+  redisexists: async (key) => {
+    const result = await client.exists(key);
     return result;
   },
   redisget: async (hash) => {
@@ -122,8 +123,35 @@ redisGET: async(hash)=> {
       console.error(error);
       throw error;
     }
-  }
-}
+  },
+
+  findOneDocumentWithCache: async function (query, collectionName, key, expiryInSeconds) {
+    try {
+      if (!query || !collectionName || !key || typeof expiryInSeconds !== 'number') {
+        throw new Error('Invalid input parameters');
+      }
+      const exists = await client.exists(key);
+     if (exists) {
+       const cachedData = await client.get(key);
+        console.log("Data from Redis:", cachedData);
+        return JSON.parse(cachedData);
+      } else {
+         const collection = eval(collectionName);
+         const document = await collection.findOne(query);
+       if (!document) {
+          return null;
+        } else {
+         await client.setEx(key, expiryInSeconds, JSON.stringify(document));
+          console.log("Data from MongoDB:", document);
+          return document;
+        }
+      }
+    } catch (error) {
+      console.error(error);
+      throw error;
+    }
+  },
+};
 
 
 

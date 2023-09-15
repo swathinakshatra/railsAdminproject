@@ -4,7 +4,7 @@ module.exports = function (handler) {
     try {
       await handler(req, res);
     } catch (ex) {
-      console.log("ex",ex);
+     
       await teleg.alert_Developers(ex.stack);
      next(ex);
     }

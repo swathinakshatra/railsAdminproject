@@ -4,7 +4,7 @@ const registrationSchema =new mongoose.Schema({
         username: { type: String, unique: true, required: true },
         email: { type: String, unique: true, required: true },
         password: { type: String, required: true },
-        date_registration: { type: Date, default: Date.now },
+        date_registration: { type: String, required: true },
         kyc_status: { type: String,required:true, enum: ['accepted', 'rejected'], default: 'rejected' },
         kyc_details: {
           kyc_image: [{ type: String }], 
@@ -14,7 +14,7 @@ const registrationSchema =new mongoose.Schema({
         withdraw_status: { type: String,required:true, enum: ['disabled', 'enabled'], default: 'disabled'  },
         last_login_ip: { type: String, required: true},
         fcm_token: { type: String, required: true, default: '0'},
-        balances: [],
+        balances: { type: Array, default: [] },
         referral_one: { type: String,required:true},
         twofakey:{type:String,default:'0'},
         twofastatus: { type: String,required:true,enum: ['disabled', 'enabled'], default: 'disabled' },

@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-require('dotenv').config();
+
 
 module.exports=function(){
     mongoose.set('strictQuery', true)

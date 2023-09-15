@@ -15,10 +15,7 @@ module.exports = {
       return "error";
     }
   },
- 
-
-
-decrypt: (str) => {
+ decrypt: (str) => {
     try {
       const dattt = CryptoJS.AES.decrypt(str, key.toString());
       return dattt.toString(CryptoJS.enc.Utf8);

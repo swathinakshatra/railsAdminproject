@@ -544,6 +544,22 @@ const resetpassword = (data) => {
   });
   return schema.validate(data);
 };
+const updatecoinbalance = (data) => {
+  const schema = Joi.object({
+    
+    email: Joi.string().email().min(5).max(250).required().messages({
+      'string.email': 'Invalid email format',
+      'string.empty': 'Email is required',
+      'string.min': 'Email should have a minimum length of {#limit}',
+      'string.max': 'Email should have a maximum length of {#limit}',
+      'any.required': 'Email is required'
+    }),
+    coinname:Joi.string().required(),
+    amount:Joi.string().required()
+   
+  });
+  return schema.validate(data);
+};
 const validateresetpassword = (data) => {
   const schema = Joi.object({
     adminId:Joi.string().required(),
@@ -563,6 +579,28 @@ const validateadmintype = (data) => {
 const validateadminid = (data) => {
   const schema = Joi.object({
     adminId:Joi.string().required()
+    
+  });
+  return schema.validate(data);
+};
+const validatecoin = (data) => {
+  const schema = Joi.object({
+    userid:Joi.string().required(),
+    coinid:Joi.string().required()
+    
+  });
+  return schema.validate(data);
+};
+const validatelimit = (data) => {
+  const schema = Joi.object({
+    limit: Joi.number().integer().required(), 
+  });
+  return schema.validate(data);
+};
+const validateuserscoin = (data) => {
+  const schema = Joi.object({
+    
+    coinid:Joi.string().required()
     
   });
   return schema.validate(data);
@@ -606,21 +644,24 @@ const verifytwofa = (data) => {
 };
 const validatecoins = (data) => {
   const schema = Joi.object({
-   
-    coinname: Joi.string().required(),
-    cointype: Joi.string().required(),
-    ticker: Joi.string().required(),
-    otcmin: Joi.number().min(100).required(),
-    otcmax: Joi.number().min(1000000).required(),
-    withdrawmin: Joi.number().min(100).required(),
-    withdrawmax: Joi.number().min(1000000).required(),
-    transmin: Joi.number().min(100).required(),
-    transmax: Joi.number().min(1000000).required(),
-    status: Joi.string().valid('Active', 'Inactive').required(),
-   
+    coinName: Joi.string().required(),
+    ticker:Joi.string().required(),
+    coinStatus: Joi.string().required(),
+    withdrawMin: Joi.number().min(100).required(),
+    withdrawMax: Joi.number().max(1000000).required(),
+    withdrawFeeType: Joi.string().required(),
+    withdrawFee: Joi.number().required(),
+    withdrawStatus: Joi.string().required(),
+    depositMin: Joi.number().min(100).required(),
+    depositMax: Joi.number().max(1000000).required(),
+    depositFeeType: Joi.string().required(),
+    depositStatus:Joi.string().required(),
+    depositFee: Joi.number().required(),
+    note: Joi.string()
   });
   return schema.validate(data);
 };
+
 const validateadmincontrols = (data) => {
   const schema = Joi.object({
   Register: Joi.string().valid('Enable', 'Disable').default('Disable'),
@@ -636,6 +677,13 @@ const validatecontrols = (data) => {
     value: Joi.string().valid('Enable', 'Disable').required()
   });
 
+  return schema.validate(data);
+};
+
+const validateenc=(data) => {
+  const schema = Joi.object({
+    enc: Joi.string().required(),
+  });
   return schema.validate(data);
 };
 
@@ -678,6 +726,11 @@ module.exports = {
   validatecoins,
   validatecontrols,
   validateadminid,
-  loginuser
+  loginuser,
+  validatecoin,
+  validateuserscoin,
+  updatecoinbalance,
+  validatelimit,
+  validateenc
 
 };

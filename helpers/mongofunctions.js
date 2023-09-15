@@ -1,7 +1,8 @@
 const {AdminControls}=require('../models/admincontrols');
 const {Admin}=require('../models/Admin');
 const {User}=require('../models/user');
-const {Seating}=require('../models/places');
+
+
 module.exports = {
   insertDocument: async function (collectionName, document) {
     try {
@@ -37,6 +38,29 @@ module.exports = {
       throw error;
     }
   },
+  findfilter: async function (collectionName, filter = {}) {
+    try {
+      var tr = eval(collectionName);
+      const document = await tr.find(filter);
+      //console.log("Found documents");
+      return document;
+    } catch (error) {
+      console.error(error);
+      throw error;
+    }
+  },
+
+  findlimit: async function (collectionName, limit) {
+    try {
+      var tr = eval(collectionName);
+      const documents = await tr.find().limit(limit); 
+      return documents;
+    } catch (error) {
+      console.error(error);
+      throw error;
+    }
+  },
+
   findselect: async function (collectionName, fieldsToExclude) {
     try {
       var tr = eval(collectionName);
@@ -80,6 +104,16 @@ module.exports = {
       throw error;
     }
   },
+  aggregate:async function(collectionName,query){
+    try{
+      var tr=eval(collectionName);
+      const collection=await tr.aggregate(query);
+      return collection;
+     }catch(error){
+      console.error(error);
+      throw error;
+    }
+  },
   findLatestPosts: async function (collectionName, sortQuery, limitValue) {
     try {
       var tr = eval(collectionName);
@@ -90,6 +124,16 @@ module.exports = {
       throw error;
     }
   },
- 
+ countDocuments:async function (collectionName) {
+  try {
+    var tr = eval(collectionName);
+    const document = await tr.find();
+    //console.log("Found a document");
+    return document;
+  } catch (error) {
+    console.error(error);
+    throw error;
+  }
+},
   
 };

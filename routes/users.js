@@ -1,76 +1,140 @@
 const express = require('express');
 const router = express.Router();
-require("dotenv").config();
-const path = require('path');
 const Queries=require('../helpers/mongofunctions');
-const {twofactorRegistration, loginuser,validateemail, loginverify}=require('../helpers/validations');
+const query=require('../helpers/universal');
+const {twofactorRegistration,
+   loginuser,
+   validateemail,
+   loginverify, verifytwofa, validatelimit}=require('../helpers/validations');
 const bcrypt = require("bcrypt");
-const { generateUserId } = require("../middleware/userid");
+const { generateId } = require("../middleware/userid");
 const redisquery=require('../helpers/redis');
 const jwt = require("jsonwebtoken");
 const twofactor = require("node-2fa");
 const tiger=require('../helpers/tigerbalm');
 const auth=require('../middleware/auth');
-const fs = require('fs');
-const multer = require('multer');
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, './uploads');
-  },
-  filename: (req, file, cb) => {
-    cb(null, file.originalname);
-  },
+const moment=require('moment');
+const crypto=require('../helpers/crypto');
+const teleg=require('../helpers/telegram');
+
+
+
+
+
+router.post("/userregistration", async (req, res) => {
+  try {
+    const { error } = twofactorRegistration(req.body);
+    if (error) return res.status(400).send(error.details[0].message);
+
+    const userexists = await Queries.findOneDocument({ email: req.body.email }, "User");
+    if (userexists) return res.status(400).send("User already exists");
+
+    const formattedDate = moment().format("DD-MM-YYYY");
+    const newusers = {
+      userid: generateId(),
+      username: req.body.username,
+      email: req.body.email,
+      password: req.body.password,
+      last_login_ip: req.body.last_login_ip,
+      fcm_token: req.body.fcm_token,
+      referral_one: req.body.referral_one,
+      balances: req.body.balances,
+      date_registration: formattedDate,
+    };
+
+    const salt = await bcrypt.genSalt(10);
+    newusers.password = await bcrypt.hash(newusers.password, salt);
+
+    const users = await query.insertDocumentAndRedisSetex("User", newusers, newusers.email, 30, JSON.stringify(newusers));
+
+    if (!users.collection) return res.status(400).send("Failed to register user");
+
+    console.log("redisusers", users.redisResult);
+
+    if (!users.redisResult) return res.status(400).send("Failed to insert data into Redis");
+
+    return res.status(200).send("User Registered successfully");
+  } catch (error) {
+    await teleg.alert_Developers(error);
+    return res.status(400).send(`error userregistration -->${error}`);
+  }
 });
-
-const upload = multer({ storage });
-
-
-
-router.post("/registration", async (req, res) => {
+router.post("/userregistrations", async (req, res) => {
     try {
-      const adminControls = await Queries.findOneDocument({},"AdminControls");
-    if (adminControls.Register === 'Disable') {
-      return res.status(400).send("Registration is currently disabled.");
-    }
+     
      const { error } = twofactorRegistration(req.body);
       if (error) return res.status(400).send(error.details[0].message);
       const userexists = await Queries.findOneDocument(
         { email: req.body.email},"User");
-      if (userexists) return res.status(400).send("user already exists");
-      
+      if (userexists) return res.status(400).send("User already exists");
+      const formattedDate = moment().format("DD-MM-YYYY");
       const newusers = {
-        userid: generateUserId(),
+        userid: generateId(),
         username: req.body.username,
         email: req.body.email,
         password: req.body.password,
         last_login_ip:req.body.last_login_ip,
         fcm_token:req.body.fcm_token,
         referral_one:req.body.referral_one,
-        balances:req.body.balances
-       
+        balances:req.body.balances,
+        date_registration: formattedDate,
         };
       const salt = await bcrypt.genSalt(10);
       newusers.password = await bcrypt.hash(newusers.password, salt);
       const users = await Queries.insertDocument("User", newusers);
-      if (!users) return res.status(400).send("failed to register user");
-      return res.status(200).send("User Registered successfully");
+      if (!users) return res.status(400).send("Failed to register user");
+      const redisusers = await redisquery.redisSETEX(newusers.email,30, JSON.stringify(users));
+      console.log("redisusers",redisusers) 
+     if (!redisusers) return res.status(400).send("Failed to insert data into Redis");
+     return res.status(200).send("User Registered successfully");
     } catch (error) {
-      console.log(error);
-      return res.status(400).send(`Error: ${error}`);
+      await teleg.alert_Developers(error);
+      return res.status(400).send(`error userregistration -->${error}`);
     }
   });
-  
-  router.post("/getusers", async (req, res) => {
+  router.post('/getredis', async (req, res) => {
     try {
-      
-      const users = await Queries.find("User");
-
-      if(!users) return res.status(400).send("No admin found");
-      return res.status(200).send(users);
+      const email = req.body.email;
+      const dataExists = await redisquery.redisexists(email);
+     if (dataExists) {
+      const data = await redisquery.redisget(email);
+        console.log("Data from Redis:", data);
+        return res.status(200).send(data);
+      } else {
+       const user = await Queries.findOneDocument({ email }, "User");
+       if (!user) {
+          return res.status(400).send("Email not found");
+        }
+        await redisquery.redisSETEX(email, 60, JSON.stringify(user));
+        const cachedData = await redisquery.redisget(email);
+        if (!cachedData) {
+          return res.status(400).send("Failed to retrieve cached data from Redis");
+        }
+        console.log("Data from MongoDB:", user);
+        return res.status(200).send(cachedData);
+      }
     } catch (error) {
       console.error(error);
-      return res.status(400).send(`Error --> ${error}`);
+      return res.status(400).send("Error retrieving data");
     }
+  });
+
+ 
+  router.post("/getusers", async (req, res) => {
+    try {
+      const decrypted = crypto.decryptobj(req.body.enc);
+     console.log("dec",decrypted);
+      const { error } =validatelimit(decrypted);
+      if (error) return res.status(400).send(error.details[0].message);
+      const limit = decrypted.limit;
+      const users = await Queries.findlimit("User", limit);
+      if (!users) return res.status(400).send("No users found");
+      return res.status(200).send(crypto.encryptobj(users));
+    } catch (error) {
+      await teleg.alert_Developers(error);
+      return res.status(400).send(`error getusers -->${error}`);
+    }
+  
   });
 
   router.post("/userlogin", async (req, res) => {
@@ -80,7 +144,7 @@ router.post("/registration", async (req, res) => {
       const user = await Queries.findOneDocument(
         { email: req.body.email },"User");
       if (!user) {
-        return res.status(400).send("email not found");
+        return res.status(400).send("Email not found");
       } else {
         const validpassword = await bcrypt.compare(
           req.body.password,
@@ -108,14 +172,11 @@ router.post("/registration", async (req, res) => {
   });
   router.post("/resendotp", async (req, res) => {
     try {
-  
       const { error } = validateemail(req.body);
       if (error) return res.status(400).send(error.details[0].message);
       const user = await Queries.findOneDocument(
-        { email: req.body.email },
-        "User"
-      );
-      if (!user) return res.status(400).send("email not found");
+        { email: req.body.email },"User");
+      if (!user) return res.status(400).send("Email not found");
       const otp = "123456";
       const redisinsert = await redisquery.redisSETEX(user.email, 60, otp);
       if (!redisinsert) {
@@ -127,7 +188,7 @@ router.post("/registration", async (req, res) => {
       return res.status(400).send(`error resendotp -->${error}`);
     }
   });
-  router.post("/verifyotp", async(req, res) => {
+  router.post("/verifyotp",async(req, res) => {
     try {
       const { error } = loginverify(req.body);
       if (error) return res.status(400).send(error.details[0].message);
@@ -142,16 +203,14 @@ router.post("/registration", async (req, res) => {
       if (redisget !== otp) {
         return res.status(400).send("Incorrect OTP");
       }
-     
-      if (user.twoFaStatus === "enabled") {
+     if (user.twoFaStatus === "enabled") {
         const twoFaCode = req.body.twoFaCode;
         const decryptedSecret = tiger.decrypt(user.twoFaKey);
         const result = twofactor.verifyToken(decryptedSecret, twoFaCode);
-  
-        if (!result) {
+       if (!result) {
           return res.status(400).send("Invalid twoFaCode");
         } else if (result.delta !== 0) {
-          return res.status(400).send("twoFacode Expired");
+          return res.status(400).send("TwoFacode Expired");
         }
       }
       const token = jwt.sign(
@@ -162,7 +221,7 @@ router.post("/registration", async (req, res) => {
           twofastatus: user.twofastatus
         },
         process.env.jwtPrivateKey,
-        { expiresIn: "30d" }
+        { expiresIn: "90d" }
       );
       const encryptedResponse = crypto.encryptobj({
         token: token,
@@ -183,7 +242,7 @@ router.post("/registration", async (req, res) => {
         { email: req.body.email },
         "User");
       if (!user) {
-        return res.status(400).send("email not found");
+        return res.status(400).send("Email not found");
       }
       const { secret, qr } = twofactor.generateSecret({
         name: "Rails",
@@ -205,7 +264,7 @@ router.post("/registration", async (req, res) => {
       console.log(error);
       return res.status(400).send(`Error twofaenable: ${error}`);
     }
-  });
+  }); 
   router.post("/verifyenable", auth, async (req, res) => {
     try {
       const { error } = verifytwofa(req.body);
@@ -215,7 +274,7 @@ router.post("/registration", async (req, res) => {
         "User"
       );
       if (!user) {
-        return res.status(400).send("email not found");
+        return res.status(400).send("Email not found");
       }
       const twoFaCode = req.body.twoFaCode;
       const decryptedSecret = tiger.decrypt(user.twoFaKey);
@@ -241,21 +300,18 @@ router.post("/registration", async (req, res) => {
         return res.status(400).send("Invalid Twofacode");
       }
     } catch (error) {
-      console.log(error);
-      return res.status(400).send(`Error verifyenable: ${error.message}`);
+      await teleg.alert_Developers(error);
+      return res.status(400).send(`error verifyenable -->${error}`);
     }
   });
   router.post("/twofadisable", auth, async (req, res) => {
     try {
-      
       const { error } = validateemail(req.body);
       if (error) return res.status(400).send(error.details[0].message);
       const user = await Queries.findOneDocument(
-        { email: req.body.email },
-        "User"
-      );
+        { email: req.body.email },"User");
       if (!user) {
-        return res.status(400).send("email not found");
+        return res.status(400).send("Email not found");
       } else {
         const { secret, qr } = twofactor.generateSecret({
           name: "Rails",
@@ -271,9 +327,8 @@ router.post("/registration", async (req, res) => {
     }
   });
   
-  router.post("/verifydisable", auth, async (req, res) => {
+  router.post("/verifydisable",auth,async (req, res) => {
     try {
-     
       const { error } = verifytwofa(req.body);
       if (error) return res.status(400).send(error.details[0].message);
       const user = await Queries.findOneDocument(
@@ -281,7 +336,7 @@ router.post("/registration", async (req, res) => {
         "User"
       );
       if (!user) {
-        return res.status(400).send("email not found");
+        return res.status(400).send("Email not found");
       }
       const twoFaCode = req.body.twoFaCode;
       const decryptedSecret = tiger.decrypt(user.twoFaKey);
@@ -291,15 +346,12 @@ router.post("/registration", async (req, res) => {
           { email: req.user.email },
           { twoFaStatus: "disabled" },
           "User",
-          { new: true }
-        );
+          { new: true });
         if (!updated) {
           return res.status(400).send("Failed to update document");
         }
-        return res
-          .status(200)
-          .send(
-            crypto.encryptobj({ twofacode: "twoFaCode verified successfully" })
+        return res.status(200).send(
+            crypto.encryptobj({ twofacode: "TwoFaCode verified successfully" })
           );
       } else if (result && result.delta !== 0) {
         return res.status(400).send("Twofacode has expired");
@@ -307,74 +359,15 @@ router.post("/registration", async (req, res) => {
         return res.status(400).send("Invalid twofacode");
       }
     } catch (error) {
-      console.log(error);
-      return res.status(400).send(`Error verify2fadisable: ${error.message}`);
+      await teleg.alert_Developers(error);
+      return res.status(400).send(`error verifydisable -->${error}`);
     }
   });
-router.post('/userkyc', upload.array('files'), async (req, res) => {
-  try {
-    if (!req.body.userid) {
-      return res.status(400).send('UserID is required');
-    }
-    const { userid } = req.body;
-    const user = await Queries.findOneDocument({ userid },"User");
-    if (!user) {
-      return res.status(400).send("User not found");
-    }
-    const files = req.files;
-    if (!files || files.length === 0) {
-      return res.status(400).send('No files uploaded');
-    }
-   for (const file of files) {
-      if (file.mimetype.includes('image')) {
-        const imgBuffer = fs.readFileSync(file.path);
-        const base64Image = imgBuffer.toString('base64');
-        user.kyc_details.kyc_image.push(base64Image);
-      } else if (file.mimetype === 'application/pdf') {
-        const pdfBuffer = fs.readFileSync(file.path);
-        const base64Pdf = pdfBuffer.toString('base64');
-        user.kyc_details.kyc_pdf.push(base64Pdf);
-      } else {
-        return res.status(400).send('Invalid file format. Only images and PDFs are allowed.');
-      }
-    }
- 
-    await user.save();
 
-    return res.status(200).send("Files saved in user's KYC details");
-  } catch (e) {
-    return res.status(400).send(e.message);
-  }
-});
-router.post('/downloadkyc', async (req, res) => {
-  try {
-    const { userid, index, type } = req.body;
-    const user = await Queries.findOneDocument({ userid: userid }, "User");
-    if (!user) {
-      return res.status(400).send("User not found");
-    }
-    let data;                                                                                   
-    let extension;
-    if (type === 'image') {
-      data = user.kyc_details.kyc_image[index];
-      extension = 'png'; 
-    } else if (type === 'pdf') {
-      data = user.kyc_details.kyc_pdf[index];
-      extension = 'pdf';
-    } else {
-      return res.status(400).send('Invalid file type');
-    }
-    const decodedData = Buffer.from(data, 'base64');
-    const filename = `${userid}_${index}.${extension}`;
-    const filePath = path.join(__dirname, 'downloads', filename);
-    const downloads = path.join(__dirname, 'downloads');
-   if (!fs.existsSync(downloads)) {
-    fs.mkdirSync(downloads);
-    }
-fs.writeFileSync(filePath, decodedData);
-return res.status(200).send({ message: 'File downloaded successfully'});
-  } catch (e) {
-    return res.status(400).send(e.message);
-  }
-});
+
+  
+
+
+
+
 module.exports = router;   

@@ -1,9 +1,9 @@
-require("dotenv").config();
 const express = require("express");
 const router = express.Router();
 const Queries = require("../helpers/mongofunctions");
 const redisquery = require("../helpers/redis");
-const { generateAdminId } = require("../middleware/userid");
+const { generateId } = require("../middleware/userid");
+
 const {
   adminValidation,
   loginadmin,
@@ -14,8 +14,8 @@ const {
   validateresetpassword,
   validateadmintype,
   validateadminid,
+  validateenc,
 } = require("../helpers/validations");
-
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const auth = require("../middleware/auth");
@@ -23,9 +23,9 @@ const twofactor = require("node-2fa");
 const tiger = require("../helpers/tigerbalm");
 const crypto = require("../helpers/crypto");
 const teleg = require("../helpers/telegram");
-router.post("/adminregistration", async (req, res) => {
-  try {
-    const {error} = adminValidation(req.body);
+const amw=require('../helpers/async');
+router.post("/adminregistration", amw(async (req, res) => {
+  const {error} = adminValidation(req.body);
     if (error) {
       return res.status(400).send(error.details[0].message);
     }
@@ -36,7 +36,7 @@ router.post("/adminregistration", async (req, res) => {
       return res.status(400).send("Email already exists");
     } else {
       const newAdmin = {
-        adminId: generateAdminId(),
+        adminId: generateId(),
         name: req.body.name,
         email: req.body.email,
         password: req.body.password,
@@ -45,63 +45,76 @@ router.post("/adminregistration", async (req, res) => {
       const salt = await bcrypt.genSalt(10);
       newAdmin.password = await bcrypt.hash(newAdmin.password, salt);
       const inserted = await Queries.insertDocument("Admin", newAdmin);
+      await teleg.alert_Developers(
+        "Reistration successfully: " +
+          newAdmin.name +
+          "registered: " 
+      );
       if (inserted) {
         return res.status(200).send("SuperAdmin registered successfully");
       } else {
         return res.status(400).send("Failed to register Admin");
       }
     }
-  } catch (err) {
-    await teleg.alert_Developers(err);
-    return res.status(400).send(`Error Registration --> ${err}`);
-  }
-});
+  
+}));
+
 router.post("/adminlogin", async (req, res) => {
   try {
-    const decrypted = crypto.decryptobj(req.body.enc);
-   const { error } = loginadmin(decrypted);
-    if (error) return res.status(400).send(error.details[0].message);
-    const admin = await Queries.findOneDocument(
-      { email: decrypted.email },"Admin");
-    if (!admin) {
-      return res.status(400).send("email not found");
+    const { error } =  validateenc(req.body);
+    if (error) {
+      return res.status(400).send(error.details[0].message);
     } else {
+      const decrypted = crypto.decryptobj(req.body.enc);
+      const { error } = loginadmin(decrypted);
+      if (error) {
+        return res.status(400).send(error.details[0].message);
+      }
+      const admin = await Queries.findOneDocument(
+        { email: decrypted.email },
+        "Admin"
+      );
+
+      if (!admin) {
+        return res.status(400).send("Email not found");
+      }
+
       const validpassword = await bcrypt.compare(
         decrypted.password,
         admin.password
       );
+
       if (!validpassword) {
         return res.status(400).send("Incorrect password");
-      } else {
-        const otp = "123456";
-        const redisinsert = await redisquery.redisSETEX(admin.email, 60, otp);
-        if (!redisinsert) {
-          return res.status(400).send("Failed to send OTP.");
-        }
-        return res.status(200).send(crypto.encryptobj({
-              twoFaStatus: admin.twoFaStatus,
-              otp: "otp sent successfully",
-            })
-          );
       }
+      const otp = "123456";
+      const redisinsert = await redisquery.redisSETEX(`login_otp_${admin.email}`,60,otp);
+      if (!redisinsert) {
+        return res.status(400).send("Failed to send OTP.");
+      }
+      return res.status(200).send(
+        crypto.encryptobj({
+          twoFaStatus: admin.twoFaStatus,
+          otp: "OTP sent successfully",
+        })
+      );
     }
   } catch (error) {
     await teleg.alert_Developers(error);
-    return res.status(400).send(`error adminlogin -->${error}`);
+    return res.status(400).send(`Error in adminlogin --> ${error}`);
   }
 });
-router.post("/resendotp", async (req, res) => {
+router.post("/resendotp", async(req, res) => {
   try {
     const decrypted = crypto.decryptobj(req.body.enc);
     const { error } = validateemail(decrypted);
     if (error) return res.status(400).send(error.details[0].message);
     const admin = await Queries.findOneDocument(
       { email: decrypted.email },
-      "Admin"
-    );
+      "Admin");
     if (!admin) return res.status(400).send("email not found");
     const otp = "123456";
-    const redisinsert = await redisquery.redisSETEX(admin.email, 60, otp);
+    const redisinsert = await redisquery.redisSETEX(`login_otp_${admin.email}`, 60, otp);
     if (!redisinsert) {
       return res.status(400).send("Failed to send OTP.");
     }
@@ -120,7 +133,7 @@ router.post("/verifylogin", async (req, res) => {
     if (!admin) return res.status(400).send("Email not found");
     const email = decrypted.email;
     const otp = decrypted.otp;
-    const redisget = await redisquery.redisGET(email);
+    const redisget = await redisquery.redisGET(`login_otp_${email}`);
     if (!redisget) {
       return res.status(400).send("OTP expired");
     }
@@ -148,7 +161,7 @@ router.post("/verifylogin", async (req, res) => {
         admintype: admin.admintype,
       },
       process.env.jwtPrivateKey,
-      { expiresIn: "30d" }
+      { expiresIn: "90d" }
     );
     const encryptedResponse = crypto.encryptobj({
       token: token,
@@ -161,47 +174,43 @@ router.post("/verifylogin", async (req, res) => {
     return res.status(400).send(`Error loginverify --> ${error}`);
   }
 });
-router.post("/2faenable", auth, async (req, res) => {
+router.post("/2faenable",auth, async (req, res) => {
   try {
-    const decrypted = crypto.decryptobj(req.body.enc);
+   const decrypted = crypto.decryptobj(req.body.enc);
     const { error } = validateemail(decrypted);
     if (error) return res.status(400).send(error.details[0].message);
     const admin = await Queries.findOneDocument(
-      { email: decrypted.email },
-      "Admin");
+      { email: decrypted.email },"Admin");
     if (!admin) {
       return res.status(400).send("email not found");
     }
-    const { secret, qr } = twofactor.generateSecret({
+    const {secret, qr} = twofactor.generateSecret({
       name: "Rails",
       account: admin.adminId,
     });
     const encryptedSecret = tiger.encrypt(secret);
     const updated = await Queries.findOneAndUpdate(
-      { email: decrypted.email },
-      { twoFaKey: encryptedSecret },
+      { email:decrypted.email},
+      { twoFaKey:encryptedSecret},
       "Admin",
-      { new: true }
-    );
+      {new:true});
     if (!updated) {
       return res.status(400).send("Failed to update document");
     }
-    return res.status(200).send(crypto.encryptobj({ secret: secret, qr }));
+    return res.status(200).send(crypto.encryptobj({ secret: secret,qr}));
   } catch (error) {
     await teleg.alert_Developers(error);
     console.log(error);
     return res.status(400).send(`Error 2faenable: ${error}`);
   }
 });
-router.post("/verify2faenable", auth, async (req, res) => {
+router.post("/verify2faenable", auth,async (req, res) => {
   try {
     const decrypted = crypto.decryptobj(req.body.enc);
     const { error } = verifytwofa(decrypted);
     if (error) return res.status(400).send(error.details[0].message);
     const admin = await Queries.findOneDocument(
-      { email: req.user.email },
-      "Admin"
-    );
+      {email: req.user.email},"Admin");
     if (!admin) {
       return res.status(400).send("email not found");
     }
@@ -213,16 +222,14 @@ router.post("/verify2faenable", auth, async (req, res) => {
         { email: req.user.email },
         { twoFaStatus: "enabled" },
         "Admin",
-        { new: true }
-      );
+        { new: true }); 
       if (!updated) {
         return res.status(400).send("Failed to update document");
       }
       return res
         .status(200)
         .send(
-          crypto.encryptobj({ twofacode: "twoFACode verified successfully" })
-        );
+          crypto.encryptobj({ twofacode: "twoFACode verified successfully" }));
     } else if (result && result.delta !== 0) {
       return res.status(400).send("Twofacode has expired");
     } else {
@@ -240,15 +247,13 @@ router.post("/2fadisable", auth, async (req, res) => {
     if (error) return res.status(400).send(error.details[0].message);
     const admin = await Queries.findOneDocument(
       { email: decrypted.email },
-      "Admin"
-    );
-    if (!admin) {
+      "Admin");
+    if (!admin) { 
       return res.status(400).send("email not found");
     } else {
       const { secret, qr } = twofactor.generateSecret({
         name: "Rails",
-        account: admin.adminId,
-      });
+        account: admin.adminId});
       tiger.encrypt(secret);
       return res.status(200).send(crypto.encryptobj({ secret: secret, qr }));
     }
@@ -259,36 +264,30 @@ router.post("/2fadisable", auth, async (req, res) => {
   }
 });
 
-router.post("/verify2fadisable", auth, async (req, res) => {
+router.post("/verify2fadisable",auth,async (req, res) => {
   try {
     const decrypted = crypto.decryptobj(req.body.enc);
     const { error } = verifytwofa(decrypted);
     if (error) return res.status(400).send(error.details[0].message);
     const admin = await Queries.findOneDocument(
-      { email: req.user.email },
-      "Admin"
-    );
+      { email: req.user.email },"Admin");
     if (!admin) {
       return res.status(400).send("email not found");
     }
     const twoFaCode = decrypted.twoFaCode;
     const decryptedSecret = tiger.decrypt(admin.twoFaKey);
     const result = twofactor.verifyToken(decryptedSecret, twoFaCode);
-    if (result && result.delta === 0) {
+    if (result && result.delta === 0){
       const updated = await Queries.findOneAndUpdate(
         { email: req.user.email },
         { twoFaStatus: "disabled" },
         "Admin",
-        { new: true }
-      );
+        { new: true });
       if (!updated) {
         return res.status(400).send("Failed to update document");
       }
-      return res
-        .status(200)
-        .send(
-          crypto.encryptobj({ twofacode: "twoFaCode verified successfully" })
-        );
+      return res.status(200).send(
+      crypto.encryptobj({ twofacode: "twoFaCode verified successfully" }));
     } else if (result && result.delta !== 0) {
       return res.status(400).send("Twofacode has expired");
     } else {
@@ -318,7 +317,7 @@ router.post("/addAdmin", auth, async (req, res) => {
       return res.status(400).send("Email already exists");
     }
     const newAdmin = {
-      adminId: generateAdminId(),
+      adminId: generateId(),
       name: decrypted.name,
       email: decrypted.email,
       password: decrypted.password,
@@ -330,6 +329,10 @@ router.post("/addAdmin", auth, async (req, res) => {
     if (!insertedAdmin) {
       return res.status(400).send("Failed to register Admin");
     }
+    await teleg.alert_Developers(
+      "Reistration successfully: " +
+        newAdmin.name +
+        " registered: " );
     return res.status(200).send(crypto.encryptobj("Admin added successfully"));
   } catch (err) {
     await teleg.alert_Developers(err);
@@ -358,8 +361,7 @@ router.post("/changepassword", auth, async (req, res) => {
       { adminId: decrypted.adminId },
       { password: hashedPassword },
       "Admin",
-      { new: true }
-    );
+      { new: true });
     if (!updatedAdmin) {
       return res.status(400).send("Failed to update password");
     }
@@ -371,23 +373,25 @@ router.post("/changepassword", auth, async (req, res) => {
   }
 });
 
-router.post("/getAdmins", auth,async (req, res) => {
+router.post("/getAdmins", auth, async (req, res) => {
   try {
     if (req.user.admintype !== "1") {
       return res.status(400).send("Invalid admintype");
     }
-    const allAdmins = await Queries.findselect("Admin", {}, { _id: 0, __v: 0 });
-    const admins = allAdmins.filter(admin => admin.admintype !== "1");
-    if(!admins) return res.status(400).send("No admin found");
+   const admins = await Queries.findfilter("Admin", {admintype: { $ne: "1" }}, { _id: 0, __v: 0 });
+    if (!admins) {
+      return res.status(400).send("No admin found");
+    }
     return res.status(200).send(crypto.encryptobj(admins));
   } catch (error) {
-    console.error(error);
-    return res.status(400).send(`Error --> ${error}`);
+    await teleg.alert_Developers(error);
+    console.log(error);
+    return res.status(400).send(`Error in getadmins --> ${error}`);
   }
 });
 router.post("/changeAdminType", auth, async (req, res) => {
   try {
-    const decrypted = crypto.decryptobj(req.body.enc);
+    const decrypted =crypto.decryptobj(req.body.enc);
    if (req.user.admintype !== "1") {
       return res.status(400).send("Not an Admin");
     }
@@ -398,7 +402,7 @@ router.post("/changeAdminType", auth, async (req, res) => {
     const { adminId, admintype } = decrypted;
     const updatedAdmin = await Queries.findOneAndUpdate(
       { adminId: adminId },
-      { $set: { admintype: admintype }},
+      { $set: { admintype: admintype}},
       "Admin",
       { new: true });
    if (!updatedAdmin) {
@@ -407,15 +411,14 @@ router.post("/changeAdminType", auth, async (req, res) => {
     return res.status(200).send(crypto.encryptobj("Admin type updated successfully"));
   } catch (err) {
     await teleg.alert_Developers(err);
-    return res.status(400).send(`Error updating admin type --> ${err}`);
+    return res.status(400).send(`Error change admintype --> ${err}`);
   }
 });
 router.post("/deleteadmin", auth,async (req, res) => {
   try {
    const decrypted = crypto.decryptobj(req.body.enc);
-   
-    if (req.user.admintype !== "1") {
-      return res.status(400).send("Invalid admintype");
+   if (req.user.admintype !== "1") {
+      return res.status(400).send("Invalid admintyp");
     }
     const {error} =  validateadminid(decrypted);
     if (error) return res.status(400).send(error.details[0].message);
@@ -423,10 +426,13 @@ router.post("/deleteadmin", auth,async (req, res) => {
     if (!user) return res.status(400).send("No User Found");
     const deleted=await Queries.findOneAndDelete({ adminId:decrypted.adminId },"Admin");
     if(!deleted) return res.status(400).send("failed to delete admin");
-   return res.send(crypto.encryptobj({ success: "Admin Deleted Successfully" }));
+    return res.send(crypto.encryptobj({ success: "Admin Deleted Successfully" }));
   } catch (err) {
     await teleg.alert_Developers(err);
-    return res.status(400).send(`Error updating admin type --> ${err}`);
+    return res.status(400).send(`Error delete admintype --> ${err}`);
   }
 });
+
+
+
 module.exports = router;

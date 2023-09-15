@@ -3,12 +3,16 @@ const router = express.Router();
 const auth=require('../middleware/auth');
 const Queries=require('../helpers/mongofunctions');
 const {generatecoinid}=require('../middleware/userid');
-const { validateadmincontrols, validatecoins } = require('../helpers/validations');
+const { validateadmincontrols,  updatecoinbalance, validateenc, validatecoins } = require('../helpers/validations');
 const crypto=require('../helpers/crypto');
+const redisquery=require('../helpers/redis');
+const teleg = require("../helpers/telegram");
+const { JsonWebTokenError } = require('jsonwebtoken');
+
+
 
 router.post('/addcontrols', auth, async (req, res) => {
   try {
-   
     if (req.user.admintype !== '1') {
       return res.status(400).send("Invalid admintype");
     }
@@ -17,78 +21,195 @@ router.post('/addcontrols', auth, async (req, res) => {
       return res.status(400).send(error.details[0].message);
     }
     const newobj = {
-      Register:req.body.Register,
-      login:req.body.login,
-      Transfer:req.body.Transfer
+      Register:'Enable',
+      login:'Enable',
+      Transfer:'Enable'
     };
-const saved = await Queries.insertDocument('AdminControls', newobj);
-    if (!saved) {
-      return res.status(400).send('Admin controls not saved');
+const admincontrols = await Queries.insertDocument('AdminControls', newobj);
+await redisquery.redishset("AdminControls","Admincontrols",admincontrols)
+    if (!admincontrols) {
+      return res.status(400).send('Admin controls not added');
     }
-     return res.status(200).send('Admin controls saved');
-  } catch (error) {
-    console.log(error);
-    return res.status(400).send(`Error: ${error}`);
-  }
-});
-router.post('/addcoins', auth, async (req, res) => {
-  try {
-    if (req.user.admintype !== '1') {
-      return res.status(400).send("Invalid admintype");
+     return res.status(200).send('Admin controls added');
+    } catch (error) {
+      await teleg.alert_Developers(error);
+      return res.status(400).send(`error addcontrols -->${error}`);
     }
-    const { error } = validatecoins(req.body);
-    if (error) {
-      return res.status(400).send(error.details[0].message);
+  });
+
+  router.post('/admincontrols',auth,async (req, res) => {
+    try {
+      if (req.user.admintype !== '1') {
+        return res.status(400).send("Invalid admintype");
+      }
+      const adminControls = await Queries.findselect('AdminControls',{ _id: 0, __v: 0 });
+      return res.status(200).send(crypto.encryptobj(adminControls));
+    } catch (error) {
+      console.log(error);
+      return res.status(400).send(`Error: ${error}`);
     }
-   
-    const newCoin = {
-      coinid: generatecoinid(),
-      coinname: req.body.coinname,
-      cointype: req.body.cointype,
-      ticker: req.body.ticker,
-      otcmin: req.body.otcmin,
-      otcmax: req.body.otcmax,
-      withdrawmin: req.body.withdrawmin,
-      withdrawmax: req.body.withdrawmax,
-      transmin: req.body.transmin,
-      transmax: req.body.transmax,
-      status: req.body.status
-    };
-    const adminControls = await Queries.findOneDocument({},"AdminControls");
-    if (!adminControls) {
-      return res.status(400).send('Admin controls not found');
+  });
+  router.post('/addcoin', auth, async (req, res) => {
+    try {
+      // if (req.user.admintype !== '1') {
+      //   return res.status(400).send("Invalid admintype");
+      // }
+      // const { error } = validateenc(req.body);
+      // if (error) {
+      //   return res.status(400).send(error.details[0].message);
+      // } else {
+      //   const req.body = crypto.decryptobj(req.body.enc);
+      //   console.log("dec",req.body);
+        const { error } = validatecoins(req.body);
+        if (error) {
+          return res.status(400).send(error.details[0].message);
+        }
+  
+        const newCoin = {
+          coinId: generatecoinid(),
+          coinName: req.body.coinName,
+          ticker: req.body.ticker,
+          coinStatus: req.body.coinStatus,
+          withdrawMin: req.body.withdrawMin,
+          withdrawMax: req.body.withdrawMax,
+          withdrawFeeType: req.body.withdrawFeeType,
+          withdrawFee: req.body.withdrawFee,
+          withdrawStatus: req.body.withdrawStatus,
+          depositMin: req.body.depositMin,
+          depositMax: req.body.depositMax,
+          depositFeeType: req.body.depositFeeType,
+          depositFee: req.body.depositFee,
+          depositStatus: req.body.depositStatus,
+          note:req.body.note
+        };
+        const adminControls = await Queries.findOneDocument({}, "AdminControls");
+        if (!adminControls) {
+          return res.status(400).send('Admin controls not found');
+        }
+  
+        adminControls.coins.push(newCoin);
+        const savedAdminControls = await Queries.insertDocument("AdminControls", adminControls);
+        if (!savedAdminControls) {
+          return res.status(400).send('Coin not saved in admin controls');
+        }
+  
+        const users = await Queries.findOneDocument({email:req.body.email},"User");
+        if (!users || users.length === 0) {
+          return res.status(400).send("No  found");
+        }
+  
+        const coinToAdd = {
+          coinName: newCoin.coinName,
+          ticker: newCoin.ticker,
+          balance: '1000',
+        };
+  
+        const updatedUsers = await Queries.findOneAndUpdate(
+          { email:req.body.email},
+          { $push: { balances: coinToAdd } },
+          "User",
+          { new: true }
+        );
+  
+        if (!updatedUsers) {
+          return res.status(400).send('Failed to update coins');
+        }
+        const redisusers = await redisquery.ttlupdate('userData',users.email,JSON.stringify(updatedUsers),3600);
+        console.log("redisusers",redisusers) 
+       if (!redisusers) return res.status(400).send("Failed to insert data into Redis");
+      
+  
+        return res.status(200).send(('Coin added to admin controls and all users balances'));
+      
+    } catch (error) {
+      await teleg.alert_Developers(error);
+      return res.status(400).send(`Error in addcoins --> ${error}`);
     }
-    adminControls.coins.push(newCoin);
-    const saved = await adminControls.save();
-    if (!saved) {
-      return res.status(400).send('coin not saved');
-    } 
-    return res.status(200).send('coin added to admincontrols');
-  } catch (error) {
-    console.log(error);
-    return res.status(400).send(`Error: ${error}`);
-  }
-});
-router.post('/admincontrols',auth,async (req, res) => {
-  try {
-    if (req.user.admintype !== '1') {
-      return res.status(400).send("Invalid admintype");
+  });
+  router.post('/addcoins', auth, async (req, res) => { 
+    try {
+      // if (req.user.admintype !== '1') {
+      //   return res.status(400).send("Invalid admintype");
+      // }
+      // const { error } = validateenc(req.body);
+      // if (error) {
+      //   return res.status(400).send(error.details[0].message);
+      // } else {
+      //   const req.body = crypto.decryptobj(req.body.enc);
+      //   console.log("dec",req.body);
+        const { error } = validatecoins(req.body);
+        if (error) {
+          return res.status(400).send(error.details[0].message);
+        }
+  
+        const newCoin = {
+          coinId: generatecoinid(),
+          coinName: req.body.coinName,
+          ticker: req.body.ticker,
+          coinStatus: req.body.coinStatus,
+          withdrawMin: req.body.withdrawMin,
+          withdrawMax: req.body.withdrawMax,
+          withdrawFeeType: req.body.withdrawFeeType,
+          withdrawFee: req.body.withdrawFee,
+          withdrawStatus: req.body.withdrawStatus,
+          depositMin: req.body.depositMin,
+          depositMax: req.body.depositMax,
+          depositFeeType: req.body.depositFeeType,
+          depositFee: req.body.depositFee,
+          depositStatus: req.body.depositStatus,
+          note:req.body.note
+        };
+        const adminControls = await Queries.findOneDocument({}, "AdminControls");
+        if (!adminControls) {
+          return res.status(400).send('Admin controls not found');
+        }
+  
+        adminControls.coins.push(newCoin);
+        const savedAdminControls = await Queries.insertDocument("AdminControls", adminControls);
+        if (!savedAdminControls) {
+          return res.status(400).send('Coin not saved in admin controls');
+        }
+  
+        const users = await Queries.find("User");
+        if (!users || users.length === 0) {
+          return res.status(400).send("No users found");
+        }
+  
+        const coinToAdd = {
+          coinName: newCoin.coinName,
+          ticker: newCoin.ticker,
+          balance: '1000',
+        };
+  
+        const updatedUsers = await Queries.updateMany(
+          { users },
+          { $push: { balances: coinToAdd } },
+          "User",
+          { new: true }
+        );
+  
+        if (!updatedUsers) {
+          return res.status(400).send('Failed to update coins');
+        }
+       const  redisupdate=await redisquery.ttlupdate("users",JSON.stringify(updatedUsers),3600);
+       if(!redisupdate) return res.status(400).send('failed to update in redis');
+
+  
+        return res.status(200).send(('Coin added to admin controls and all users balances'));
+      
+    } catch (error) {
+      await teleg.alert_Developers(error);
+      return res.status(400).send(`Error in addcoins --> ${error}`);
     }
-    const adminControls = await Queries.findselect('AdminControls',{ _id: 0, __v: 0 ,coins:0});
-    return res.status(200).send(crypto.encryptobj(adminControls));
-  } catch (error) {
-    console.log(error);
-    return res.status(400).send(`Error: ${error}`);
-  }
-});
+  });
 router.post('/updatecontrols', auth,async (req, res) => {
   try {
-    const decrypted = crypto.decryptobj(req.body.enc);
-   if (req.user.admintype !== '1') {
-      return res.status(400).send('Invalid admintype');
-    }
-   const { Register, login, Transfer } = decrypted;
-   const { error } = validateadmincontrols(decrypted);
+  //   const decrypted = crypto.decryptobj(req.body.enc);
+  //  if (req.user.admintype !== '1') {
+  //     return res.status(400).send('Invalid admintype');
+  //   }
+   const { Register, login, Transfer } = req.body;
+   const { error } = validateadmincontrols(req.body);
     if (error) {
       return res.status(400).send(error.details[0].message);
     }
@@ -103,94 +224,20 @@ router.post('/updatecontrols', auth,async (req, res) => {
     }
     return res.status(200).send(crypto.encryptobj("admin controls updated"));
   } catch (error) {
-    console.log(error);
-    return res.status(400).send(`Error: ${error}`);
+    await teleg.alert_Developers(error);
+    return res.status(400).send(`error updatecontrols -->${error}`);
   }
 });
-
-
-router.post('/usercoin', auth, async (req, res) => {
-  try {
-    if (req.user.admintype !== '1') {
-      return res.status(400).send("Invalid admintype");
-    }
-    const { userid,coinid } = req.body;
-    const adminControls = await Queries.findOneDocument({coinid},"AdminControls");
-    if (!adminControls) {
-      return res.status(400).send('Coin not found');
-    }
-
-    const coin = adminControls.coins.find(coin => coin.coinid === coinid);
-    if (!coin) {
-      return res.status(400).send('Coin not found');
-    }
-   const coinToAdd = {
-      coinname: coin.coinname,
-      cointype: coin.cointype,
-      ticker: coin.ticker,       
-      balance: '1000',
-    };
-
-    const updatedUser = await Queries.findOneAndUpdate(
-      { userid: userid },
-      { $push: { balances: coinToAdd } },
-      "User",
-      { new: true });
-
-    if (!updatedUser) {
-      return res.status(400).send('User not found');
-    }
-
-    return res.status(200).send('Coin added to user balances');
-  } catch (error) {
-    console.error(error);
-    return res.status(400).send(`Error: ${error}`);
-  }
-});
-router.post('/userscoin', auth, async (req, res) => {
-  try {
-    if (req.user.admintype !== '1') {
-      return res.status(400).send("Invalid admintype");
-    }
-    const { coinid } = req.body;
-    const adminControls = await Queries.findOneDocument({coinid},"AdminControls");
-    if (!adminControls) {
-      return res.status(400).send('Coin not found');
-    }
-    const coin = adminControls.coins.find(coin => coin.coinid === coinid);
-    if (!coin) {
-      return res.status(400).send('Coin not found');
-    }
-
-    const coinToAdd = {
-      coinname: coin.coinname,
-      cointype: coin.cointype,
-      ticker: coin.ticker,
-      balance: '1000',
-    };
-
-    const updatedUsers = await Queries.updateMany({},
-      
-      { $push: { balances: coinToAdd } },
-      "User",{new:true});
-
-    if (!updatedUsers) {
-      return res.status(400).send('No users found');
-    }
-
-    return res.status(200).send('Coin added to all users balances');
-  } catch (error) {
-    console.error(error);
-    return res.status(400).send(`Error: ${error}`);
-  }
-});
-
 router.post('/updatecoinbalance', auth, async (req, res) => {
   try {
     if (req.user.admintype !== '1') {
       return res.status(400).send("Invalid admintype");
     }
     const { email, coinname, amount } = req.body;
+    const { error } = updatecoinbalance(req.body);
+    if (error) {
+      return res.status(400).send(error.details[0].message);
+    }
     if (isNaN(amount) || parseFloat(amount) <= 0) {
       return res.status(400).send("Invalid amount");
     }
@@ -198,6 +245,8 @@ router.post('/updatecoinbalance', auth, async (req, res) => {
     if (!user) {
       return res.status(400).send('User not found');
     }
+    console.log('User---->',user.balances);
+
     const coin = user.balances.find((balance) => balance.coinname === coinname);
     if (!coin) {
       return res.status(400).send('Coin balance not found');
@@ -209,51 +258,18 @@ router.post('/updatecoinbalance', auth, async (req, res) => {
     }
     coin.balance = (numericBalance + numericAmount).toString();
     const updatedUser = await Queries.findOneAndUpdate(
-      { email: email },
-      { $set: { "balances.$[coin].balance": coin.balance } },
-      "User",
-      { arrayFilters: [{ "coin.coinname": coinname }] },
-      
-      {new:true}
-    );
-
-    if (!updatedUser) return res.status(400).send('Balance not updated');
+      { email: email },                 
+  { $set: { "balances.$[coin].balance": coin.balance } }, 
+  "User",{arrayFilters: [{ "coin.coinname": coinname }],new: true,});
+   
+   if (!updatedUser) return res.status(400).send('Balance not updated');
+   console.log('updatedUser---->', updatedUser.balances);
     return res.status(200).send('Coin balance updated successfully');
   } catch (error) {
-    console.error(error);
-    return res.status(400).send(`Error: ${error}`);
+    await teleg.alert_Developers(error);
+    return res.status(400).send(`error updatecoinbalance -->${error}`);
   }
 });
-
-
-router.post('/userkycstatus', async (req, res) => {
-  try {
-    const { userid, kycStatus } = req.body; 
-
-    if (!userid || !kycStatus) {
-      return res.status(400).send('User ID and KYC status are required');
-    }
-
-    const user = await Queries.findOneDocument({ userid },"User");
-    if (!user) {
-      return res.status(400).send('User not found');
-    }
-
-    user.kyc_status = kycStatus;
-    await user.save();
-
-    return res.status(200).send(`KYC status changed to ${kycStatus} for user ${userid}`);
-  } catch (error) {
-    console.error(error);
-    return res.status(400).send(`Error: ${error.message}`);
-  }
-});
-
-
-
-
-
-
 module.exports = router;
 
 
